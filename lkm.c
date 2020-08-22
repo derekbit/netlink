@@ -19,10 +19,54 @@ static void nlmsg_dump(struct nlmsghdr *nlh)
 
 static void netlink_recv_msg_fn(struct sk_buff *skb_in)
 {
-	unsigned char *data = skb_in->data;
-	struct nlmsghdr *hdr = (struct nlmsghdr *)data;
+	struct nlmsghdr *nlh_recv, *nlh_reply;
+	int user_space_process_port_id;
+	char *user_space_data;
+	int user_space_data_len;
+	char kernel_reply[256];
+	struct sk_buff *skb_out;
+	int ret;
 
-	nlmsg_dump(hdr);
+	nlh_recv = (struct nlmsghdr *)(skb_in->data);
+	nlmsg_dump(nlh_recv);
+
+	user_space_process_port_id = nlh_recv->nlmsg_pid;
+
+	printk(KERN_INFO "netlink: port id of the user-space process = %u\n",
+		user_space_process_port_id);
+
+	user_space_data = (char *)nlmsg_data(nlh_recv);
+	user_space_data_len = skb_in->len;
+
+	printk(KERN_INFO "netlink: recv from user-space process = %s, "
+		"skb_in->len = %u, nlh_recv->nlmsg_len = %u\n",
+		user_space_data, user_space_data_len, nlh_recv->nlmsg_len);
+
+	/* Reply to user-space process if flags have NLM_F_ACK. */
+	if (nlh_recv->nlmsg_flags & NLM_F_ACK) {
+		memset(kernel_reply, 0, sizeof(kernel_reply));
+		snprintf(kernel_reply, sizeof(kernel_reply),
+			"Msg from Process %u has been processed by kernel",
+			nlh_recv->nlmsg_pid);
+
+		skb_out = nlmsg_new(sizeof(kernel_reply), 0);
+
+		/* Send msg out.*/
+		nlh_reply = nlmsg_put(skb_out,
+				      0, /* port id is 0 because it is sent by kernel */
+				      nlh_recv->nlmsg_seq,
+				      NLMSG_DONE,
+				      sizeof(kernel_reply),
+				      0);
+
+		/* Copy payload to nlh_reply */
+		memcpy(nlmsg_data(nlh_reply), kernel_reply, sizeof(kernel_reply));
+		ret = nlmsg_unicast(nl_sk, skb_out, user_space_process_port_id);
+		if (ret < 0) {
+			printk(KERN_INFO "Error while sending the data back to user-space process\n");
+			kfree_skb(skb_out);
+		}
+	}
 }
 
 static struct netlink_kernel_cfg cfg = {
